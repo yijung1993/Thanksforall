@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>感恩日記</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#f7f4ef;
+    --card:#fffdf9;
+    --ink:#26232b;
+    --soft:#7a7480;
+    --line:#e7e1d8;
+    --accent:#6f8f6a;
+    --accent-dark:#54704f;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--paper);
+    color:var(--ink);
+    font-family:"Noto Sans TC",system-ui,sans-serif;
+    line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:640px;margin:0 auto;padding:48px 20px 80px;}
+  header{margin-bottom:32px;}
+  .eyebrow{
+    font-size:12px;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--accent-dark);font-weight:500;margin:0 0 6px;
+  }
+  h1{
+    font-family:"Noto Serif TC",serif;font-weight:600;
+    font-size:32px;margin:0;letter-spacing:.02em;
+  }
+  .composer{
+    background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:18px;margin-bottom:36px;
+  }
+  textarea{
+    width:100%;border:none;resize:vertical;min-height:88px;
+    font-family:inherit;font-size:16px;color:var(--ink);background:transparent;
+    outline:none;line-height:1.7;
+  }
+  textarea::placeholder{color:#b6afa5;}
+  .composer-foot{
+    display:flex;align-items:center;justify-content:space-between;
+    margin-top:10px;border-top:1px solid var(--line);padding-top:12px;
+  }
+  .date-tag{font-size:13px;color:var(--soft);}
+  button{
+    font-family:inherit;font-size:15px;font-weight:500;
+    background:var(--accent);color:#fff;border:none;
+    padding:9px 20px;border-radius:9px;cursor:pointer;transition:background .15s;
+  }
+  button:hover:not(:disabled){background:var(--accent-dark);}
+  button:disabled{opacity:.5;cursor:default;}
+  .status{font-size:14px;min-height:20px;margin:0 0 20px;color:var(--soft);}
+  .status.error{color:#b5482f;}
+  .entries-title{
+    font-size:13px;letter-spacing:.1em;color:var(--soft);
+    text-transform:uppercase;margin:0 0 14px;
+  }
+  .entry{
+    background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:16px 18px;margin-bottom:12px;
+  }
+  .entry .when{
+    font-size:12px;color:var(--accent-dark);letter-spacing:.05em;
+    margin-bottom:6px;font-weight:500;
+  }
+  .entry .text{
+    font-family:"Noto Serif TC",serif;font-size:16px;white-space:pre-wrap;
+  }
+  .empty{color:var(--soft);font-size:15px;text-align:center;padding:24px 0;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <p class="eyebrow">每天一件值得感謝的事</p>
+    <h1>感恩日記</h1>
+  </header>
+
+  <div class="composer">
+    <textarea id="input" placeholder="今天，我很感謝……"></textarea>
+    <div class="composer-foot">
+      <span class="date-tag" id="today"></span>
+      <button id="saveBtn">記下這一筆</button>
+    </div>
+  </div>
+
+  <p class="status" id="status"></p>
+
+  <p class="entries-title">過往紀錄</p>
+  <div id="list"><p class="empty">載入中…</p></div>
+</div>
+
+<script>
+// ========= 只有這兩行是你的設定，之後其他分類就是複製這套、換這兩行 =========
+const WORKER = "https://notion-proxy.yijung1993.workers.dev"; // 你的 Worker 網址（結尾不要斜線）
+const DB_ID  = "3be45c91d96a80339a36d87c04f94b2a";            // 感恩日記的資料庫 ID
+// =======================================================================
+
+const $ = (id) => document.getElementById(id);
+let dataSourceId = null; // 會自動抓，不用手動填
+
+function todayStr(){
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+
+function setStatus(msg, isError){
+  const el = $("status");
+  el.textContent = msg || "";
+  el.className = "status" + (isError ? " error" : "");
+}
+
+// 取得 data source id（2025-09-03 新規則：先讀 database，拿 data_sources[0].id）
+async function ensureDataSource(){
+  if (dataSourceId) return dataSourceId;
+  const r = await fetch(`${WORKER}/v1/databases/${DB_ID}`);
+  const db = await r.json();
+  if (!r.ok) throw new Error(db.message || "讀取資料庫失敗");
+  if (!db.data_sources || !db.data_sources.length) throw new Error("這個資料庫沒有 data source");
+  dataSourceId = db.data_sources[0].id;
+  return dataSourceId;
+}
+
+// 讀出所有紀錄並顯示
+async function loadEntries(){
+  try{
+    const ds = await ensureDataSource();
+    const r = await fetch(`${WORKER}/v1/data_sources/${ds}/query`, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({
+        page_size:100,
+        sorts:[{ timestamp:"created_time", direction:"descending" }]
+      })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.message || "查詢失敗");
+
+    const list = $("list");
+    if (!data.results.length){
+      list.innerHTML = `<p class="empty">還沒有任何紀錄，寫下第一筆吧。</p>`;
+      return;
+    }
+    list.innerHTML = data.results.map(page => {
+      const p = page.properties;
+      const when = (p["Name"]?.title?.[0]?.plain_text) || todayStr();
+      const text = (p["內容"]?.rich_text?.[0]?.plain_text) || "(空白)";
+      return `<div class="entry"><div class="when">${escapeHtml(when)}</div><div class="text">${escapeHtml(text)}</div></div>`;
+    }).join("");
+  }catch(err){
+    setStatus("讀取失敗：" + err.message, true);
+    $("list").innerHTML = "";
+  }
+}
+
+// 寫入一筆
+async function saveEntry(){
+  const text = $("input").value.trim();
+  if (!text){ setStatus("先寫點什麼再記下來 :)", false); return; }
+
+  $("saveBtn").disabled = true;
+  setStatus("儲存中…");
+  try{
+    const ds = await ensureDataSource();
+    const r = await fetch(`${WORKER}/v1/pages`, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({
+        parent:{ type:"data_source_id", data_source_id: ds },
+        properties:{
+          "Name":  { title:     [{ text:{ content: todayStr() } }] },
+          "內容":  { rich_text: [{ text:{ content: text } }] }
+        }
+      })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.message || "儲存失敗");
+
+    $("input").value = "";
+    setStatus("已記下 ✓");
+    await loadEntries();
+  }catch(err){
+    setStatus("儲存失敗：" + err.message, true);
+  }finally{
+    $("saveBtn").disabled = false;
+  }
+}
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => (
+    {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]
+  ));
+}
+
+$("today").textContent = todayStr();
+$("saveBtn").addEventListener("click", saveEntry);
+loadEntries();
+</script>
+</body>
+</html>
